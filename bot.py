@@ -1,54 +1,70 @@
+import os
 import asyncio
+import aiohttp
 from web3 import Web3
 from telegram import Bot
-import os
 
-# ---------------- Config from Environment ----------------
-WSS = os.getenv("BSC_WSS")  # WebSocket RPC endpoint (Ankr, Infura, QuickNode)
-TELEGRAM_TOKEN = os.getenv("TG_TOKEN")
-ALLOWED_IDS = [int(x) for x in os.getenv("TG_ALLOWED_IDS").split(",")]
-FACTORY_ADDRESS = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73"  # PancakeSwap Factory (BSC)
+# ---------------------------
+# تنظیمات
+# ---------------------------
+TELEGRAM_TOKEN = "8296961071:AAEWjoANG7T00w0-svmSyIVM4vSosOjgdB4"
+ALLOWED_USERS = [610160171]  # فقط آی‌دی‌های مجاز
+NODE_REAL_API_KEY = "02f153a065884f34877fbbbe2a474abf"
 
-# ---------------- Web3 + Telegram ----------------
-w3 = Web3(Web3.WebsocketProvider(WSS))
+FACTORY_ADDRESS = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"  # UniswapV2 مثال
+FACTORY_ABI = [...]  # اینجا ABI کامل رو بگذار
+
+# ---------------------------
+# اتصال Web3 به نود
+# ---------------------------
+w3 = Web3(Web3.HTTPProvider(f"https://bsc-mainnet.nodereal.io/v1/{NODE_REAL_API_KEY}"))
+if not w3.is_connected():
+    raise Exception("❌ اتصال به نود برقرار نشد!")
+
+factory = w3.eth.contract(
+    address=w3.to_checksum_address(FACTORY_ADDRESS),
+    abi=FACTORY_ABI
+)
+
 bot = Bot(token=TELEGRAM_TOKEN)
 
-FACTORY_ABI = [{
-    "anonymous": False,
-    "inputs": [
-        {"indexed": True, "internalType": "address", "name": "token0", "type": "address"},
-        {"indexed": True, "internalType": "address", "name": "token1", "type": "address"},
-        {"indexed": False, "internalType": "address", "name": "pair", "type": "address"},
-        {"indexed": False, "internalType": "uint256", "name": "", "type": "uint256"}
-    ],
-    "name": "PairCreated",
-    "type": "event"
-}]
+# ---------------------------
+# ارسال پیام به کاربران مجاز
+# ---------------------------
+async def send_message_to_allowed(text):
+    for user_id in ALLOWED_USERS:
+        try:
+            await bot.send_message(chat_id=user_id, text=text)
+        except Exception as e:
+            print(f"خطا در ارسال پیام به {user_id}: {e}")
 
-factory = w3.eth.contract(address=w3.toChecksumAddress(FACTORY_ADDRESS), abi=FACTORY_ABI)
+# ---------------------------
+# شبیه‌ساز تحلیل پامپ (نسخه تست)
+# ---------------------------
+async def detect_pump_test():
+    await asyncio.sleep(5)  # تأخیر برای تست
+    coin_name = "TESTCOIN"
+    buy_time = "الان"
+    sell_time = "۵ دقیقه بعد"
+    contract = "0x1234567890abcdef..."
+    exchange = "PancakeSwap"
 
-# ---------------- Bot Functions ----------------
-async def send_alert(msg):
-    for chat_id in ALLOWED_IDS:
-        await bot.send_message(chat_id=chat_id, text=msg)
+    message = f"""
+🚀 سیگنال پامپ شناسایی شد!
+💰 اسم ارز: {coin_name}
+🕒 زمان خرید: {buy_time}
+🕒 زمان فروش: {sell_time}
+📜 آدرس کانترکت: {contract}
+🏦 صرافی: {exchange}
+"""
+    await send_message_to_allowed(message)
 
-async def handle_event(event):
-    token0 = event['args']['token0']
-    token1 = event['args']['token1']
-    pair = event['args']['pair']
-    msg = f"🚀 New Pair Created!\nToken0: {token0}\nToken1: {token1}\nPair: {pair}"
-    await send_alert(msg)
+# ---------------------------
+# اجرای اصلی
+# ---------------------------
+async def main():
+    await send_message_to_allowed("✅ ربات تست پامپ‌یاب فعال شد!")
+    await detect_pump_test()
 
-async def log_loop(event_filter, poll_interval):
-    while True:
-        for event in event_filter.get_new_entries():
-            await handle_event(event)
-        await asyncio.sleep(poll_interval)
-
-def main():
-    event_filter = factory.events.PairCreated.create_filter(fromBlock='latest')
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(log_loop(event_filter, 2))
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    asyncio.run(main())
