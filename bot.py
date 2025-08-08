@@ -1,70 +1,102 @@
-import os
 import asyncio
-import aiohttp
+import logging
+import os
 from web3 import Web3
 from telegram import Bot
+from telegram.constants import ParseMode
 
-# ---------------------------
-# تنظیمات
-# ---------------------------
-TELEGRAM_TOKEN = "8296961071:AAEWjoANG7T00w0-svmSyIVM4vSosOjgdB4"
-ALLOWED_USERS = [610160171]  # فقط آی‌دی‌های مجاز
-NODE_REAL_API_KEY = "02f153a065884f34877fbbbe2a474abf"
+# -------------------- تنظیمات --------------------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # توکن ربات
+CHAT_ID = os.getenv("CHAT_ID")  # آیدی چت یا گروه
+BSC_NODE_URL = os.getenv("BSC_NODE_URL")  # لینک RPC از NodeReal یا هر نود BSC
 
-FACTORY_ADDRESS = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"  # UniswapV2 مثال
-FACTORY_ABI = [...]  # اینجا ABI کامل رو بگذار
+# آدرس فکتوری PancakeSwap (ورژن 2)
+FACTORY_ADDRESS = Web3.to_checksum_address("0xCA143Ce32Fe78f1f7019d7d551a6402fC5350c73")
 
-# ---------------------------
-# اتصال Web3 به نود
-# ---------------------------
-w3 = Web3(Web3.HTTPProvider(f"https://bsc-mainnet.nodereal.io/v1/{NODE_REAL_API_KEY}"))
+# ABI مینیمال برای PairCreated
+FACTORY_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "token0", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "token1", "type": "address"},
+            {"indexed": False, "internalType": "address", "name": "pair", "type": "address"},
+            {"indexed": False, "internalType": "uint256", "name": "", "type": "uint256"}
+        ],
+        "name": "PairCreated",
+        "type": "event"
+    },
+    {
+        "inputs": [],
+        "name": "allPairsLength",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "name": "allPairs",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
+# -------------------- تنظیمات لاگ --------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# -------------------- اتصال به BSC --------------------
+w3 = Web3(Web3.HTTPProvider(BSC_NODE_URL))
 if not w3.is_connected():
-    raise Exception("❌ اتصال به نود برقرار نشد!")
+    logger.error("❌ اتصال به BSC برقرار نشد!")
+    exit(1)
+else:
+    logger.info("✅ به BSC متصل شدیم")
 
-factory = w3.eth.contract(
-    address=w3.to_checksum_address(FACTORY_ADDRESS),
-    abi=FACTORY_ABI
-)
-
+factory = w3.eth.contract(address=FACTORY_ADDRESS, abi=FACTORY_ABI)
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# ---------------------------
-# ارسال پیام به کاربران مجاز
-# ---------------------------
-async def send_message_to_allowed(text):
-    for user_id in ALLOWED_USERS:
+
+# -------------------- ارسال پیام --------------------
+async def send_message(text):
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"خطا در ارسال پیام: {e}")
+
+
+# -------------------- گوش دادن به رویدادها --------------------
+async def watch_new_pairs():
+    logger.info("👀 شروع مانیتورینگ جفت‌ارزهای جدید...")
+    event_filter = factory.events.PairCreated.create_filter(fromBlock="latest")
+
+    while True:
         try:
-            await bot.send_message(chat_id=user_id, text=text)
+            for event in event_filter.get_new_entries():
+                token0 = event["args"]["token0"]
+                token1 = event["args"]["token1"]
+                pair = event["args"]["pair"]
+
+                msg = f"🚀 <b>جفت‌ارز جدید پیدا شد!</b>\n\n" \
+                      f"Token0: <code>{token0}</code>\n" \
+                      f"Token1: <code>{token1}</code>\n" \
+                      f"Pair: <code>{pair}</code>"
+
+                logger.info(msg)
+                await send_message(msg)
+
         except Exception as e:
-            print(f"خطا در ارسال پیام به {user_id}: {e}")
+            logger.error(f"خطا در خواندن رویداد: {e}")
 
-# ---------------------------
-# شبیه‌ساز تحلیل پامپ (نسخه تست)
-# ---------------------------
-async def detect_pump_test():
-    await asyncio.sleep(5)  # تأخیر برای تست
-    coin_name = "TESTCOIN"
-    buy_time = "الان"
-    sell_time = "۵ دقیقه بعد"
-    contract = "0x1234567890abcdef..."
-    exchange = "PancakeSwap"
+        await asyncio.sleep(3)
 
-    message = f"""
-🚀 سیگنال پامپ شناسایی شد!
-💰 اسم ارز: {coin_name}
-🕒 زمان خرید: {buy_time}
-🕒 زمان فروش: {sell_time}
-📜 آدرس کانترکت: {contract}
-🏦 صرافی: {exchange}
-"""
-    await send_message_to_allowed(message)
 
-# ---------------------------
-# اجرای اصلی
-# ---------------------------
+# -------------------- اجرای برنامه --------------------
 async def main():
-    await send_message_to_allowed("✅ ربات تست پامپ‌یاب فعال شد!")
-    await detect_pump_test()
+    await send_message("✅ ربات پامپ‌یاب روشن شد و منتظر جفت‌ارزهای جدید است...")
+    await watch_new_pairs()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
